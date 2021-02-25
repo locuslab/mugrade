@@ -9,7 +9,9 @@ setup(
 	description="Interface library for minimalist autograding site",
 	python_requires=">=3.5",
 	url="http://github.com/locuslab/mugrade",
-	install_requires=["numpy >= 1.15"],
-	setup_requires=["numpy >= 1.15"]
+	install_requires=[
+		"numpy >= 1.15",
+		"requests >= 2.25.1",
+	],
 )
 
