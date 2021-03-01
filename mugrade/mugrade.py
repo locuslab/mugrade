@@ -2,13 +2,14 @@ import os
 import numpy as np
 import requests
 import pickle
+import dill
 import base64
 import json
 import inspect
 import copy
-
-import mugrade_test_cases
-import importlib
+import gzip
+import re
+import types
 
 server_url = "https://mugrade.datasciencecourse.org/_/api/"
 
@@ -46,9 +47,32 @@ def objects_equal(value,ref):
     else:
         return value == ref
 
-def get_lambda_source(f):
-    a = inspect.getsource(f).strip()
-    return a[a.find("lambda"):].rstrip(",")
+def load_test_cases(filename="mugrade_test_cases.pkl.gz"):
+    try:
+        with gzip.open(filename, "rb") as f:
+            test_cases = dill.load(f)
+    except:
+        test_cases = {}
+    return test_cases
+
+
+def print_test_cases(func, case_index=None, local_cases=True):
+    """Print out a readable form of test cases"""
+    test_cases = load_test_cases()
+    tests = test_cases[func.__name__ if isinstance(func, types.FunctionType) else func]
+    tests = tests["local_cases"] if local_cases else tests["grader_cases"]
+    if case_index is None:
+        for i,t in enumerate(tests):
+            print(f"Test Case {i}: {t['test_string']}")
+    else:
+        print(f"Test Case {case_index}: {tests[case_index]['test_string']}")
+
+
+def get_local_test_targets(func, case_index):
+    test_cases = load_test_cases()
+    tests = test_cases[func.__name__ if isinstance(func, types.FunctionType) else func]["local_cases"]
+    return tests[case_index]["target"]
+
 
 
 def get_test_value(i, func, tests, outputs):
@@ -56,32 +80,23 @@ def get_test_value(i, func, tests, outputs):
 
     # don't process the same input twice, for speed
     prev_output = False
-    for j in range(i):
-        if objects_equal(tests[i]["input"], tests[j]["input"]):
-            outputs[i] = outputs[j]
-            prev_output = True
-            break
+    # for j in range(i):
+    #     if objects_equal(tests[i]["test_args"], tests[j]["test_args"]):
+    #         outputs[i] = outputs[j]
+    #         prev_output = True
+    #         break
 
     if not prev_output:
-        if isinstance(tests[i]["input"], tuple):
-            outputs[i] = func(*tests[i]["input"])
-        else:
-            outputs[i] = func(tests[i]["input"])
+        outputs[i] = func(*[t() for t in tests[i]["input_func"]])
 
     # run postprocessing on the output
-    if "postprocess" in tests[i]:
-        if isinstance(outputs[i], tuple):
-            return tests[i]["postprocess"](*outputs[i])
-        else:
-            return tests[i]["postprocess"](outputs[i])
-    else:
-        return outputs[i]
+    return tests[i]["postprocess"](outputs[i])
 
 
 def test_local(func):
     """ Run the suite of local tests on func, evaluating each input/output pair """
-    importlib.reload(mugrade_test_cases)
-    tests = mugrade_test_cases.test_cases[func.__name__]["local_cases"]
+    test_cases = load_test_cases()
+    tests = test_cases[func.__name__]["local_cases"]
     print(f"### Running {len(tests)} local tests")
     outputs = [None]*len(tests)
     for i, test in enumerate(tests):
@@ -92,9 +107,7 @@ def test_local(func):
             print ("PASSED")
         else:
             print("FAILED: ")
-            print(f"#   For input {test['input']}, ")
-            if "postprocess" in test:
-                print(f"#     ... postprocessing with function `{get_lambda_source(test['postprocess'])}`,")
+            print(f"#   For test {test['test_string']}, ")
             print(f"#     ... expected output {test['target']}")
             print(f"#     ... got output {value}")
             print("#")
@@ -109,8 +122,8 @@ def b64_unpickle(obj):
 def publish_grader(user_key, overwrite=False):
     """ Run function and post results of cases to the server"""
     def wrap(func):
-        importlib.reload(mugrade_test_cases)
-        tests = mugrade_test_cases.test_cases[func.__name__]["grader_cases"]
+        test_cases = load_test_cases()
+        tests = test_cases[func.__name__]["grader_cases"]
         outputs = [None]*len(tests)
         values = [get_test_value(i, func, tests, outputs) for i in range(len(tests))]
 
@@ -128,17 +141,25 @@ def publish_grader(user_key, overwrite=False):
     return wrap
 
 
-
 def submit(user_key):
     """ Run function and evaluate test case results """
     def wrap(func):
-        importlib.reload(mugrade_test_cases)
-        tests = mugrade_test_cases.test_cases[func.__name__]["grader_cases"]
+        test_cases = load_test_cases()
+        tests = test_cases[func.__name__]["grader_cases"]
         print(f"### Submitting {len(tests)} grader tests")
+
+        if isinstance(func, types.FunctionType):
+            code = inspect.getsource(func)
+        else:
+            # otherwise, it is a class, get all sources 
+            code = "\n".join([inspect.getsource(a[1]) for a in inspect.getmembers(func) 
+                              if not a[0].startswith("__") or a[0]=="__init__"])
+
+
         response = requests.post(server_url + "submission",
             params = {"user_key": user_key,
             "func_name": func.__name__,
-            "code": inspect.getsource(func)})
+            "code": code})
 
         if response.status_code != 200:
             print(f"Error : {response.text}")
@@ -166,9 +187,7 @@ def submit(user_key):
                     print("PASSED")
                 else:
                     print("FAILED")
-                    print(f"#   For input {test['input']}")
-                    if "postprocess" in test:
-                        print(f"#     ... postprocessing with function `{get_lambda_source(test['postprocess'])}`,")
+                    print(f"#   For test {test['test_string']}")
                     print(f"#     {response.json()['status']}")
                     print("#")
         return func

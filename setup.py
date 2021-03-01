@@ -10,6 +10,7 @@ setup(
 	python_requires=">=3.5",
 	url="http://github.com/locuslab/mugrade",
 	install_requires=["numpy >= 1.15"],
+	zip_safe=False,
 	setup_requires=["numpy >= 1.15"]
 )
 
