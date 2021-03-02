@@ -2,7 +2,6 @@ import os
 import numpy as np
 import requests
 import pickle
-import dill
 import base64
 import json
 import inspect
@@ -48,11 +47,8 @@ def objects_equal(value,ref):
         return value == ref
 
 def load_test_cases(filename="mugrade_test_cases.pkl.gz"):
-    try:
-        with gzip.open(filename, "rb") as f:
-            test_cases = dill.load(f)
-    except:
-        test_cases = {}
+    with gzip.open(filename, "rb") as f:
+        test_cases = pickle.load(f)
     return test_cases
 
 
@@ -75,23 +71,6 @@ def get_local_test_targets(func, case_index):
 
 
 
-def get_test_value(i, func, tests, outputs):
-    """Wrapper for getting output of a test, called from several functions"""
-
-    # don't process the same input twice, for speed
-    prev_output = False
-    # for j in range(i):
-    #     if objects_equal(tests[i]["test_args"], tests[j]["test_args"]):
-    #         outputs[i] = outputs[j]
-    #         prev_output = True
-    #         break
-
-    if not prev_output:
-        outputs[i] = func(*[t() for t in tests[i]["input_func"]])
-
-    # run postprocessing on the output
-    return tests[i]["postprocess"](outputs[i])
-
 
 def test_local(func):
     """ Run the suite of local tests on func, evaluating each input/output pair """
@@ -99,9 +78,14 @@ def test_local(func):
     tests = test_cases[func.__name__]["local_cases"]
     print(f"### Running {len(tests)} local tests")
     outputs = [None]*len(tests)
+
+    # gross hack to insert the function into frame _prior_ to returning, so we can run eval()
+    inspect.currentframe().f_back.f_locals[func.__name__] = func
+
     for i, test in enumerate(tests):
         print(f"# Running test {i+1}/{len(tests)} ... ", end="")
-        value = get_test_value(i, func, tests, outputs)
+        #value = get_test_value(i, func, tests, outputs)
+        value = eval(test["test_string"], inspect.currentframe().f_back.f_locals)
 
         if objects_equal(value, test["target"]):
             print ("PASSED")
@@ -124,8 +108,11 @@ def publish_grader(user_key, overwrite=False):
     def wrap(func):
         test_cases = load_test_cases()
         tests = test_cases[func.__name__]["grader_cases"]
-        outputs = [None]*len(tests)
-        values = [get_test_value(i, func, tests, outputs) for i in range(len(tests))]
+        inspect.currentframe().f_back.f_locals[func.__name__] = func
+
+        values = []
+        for test in tests:
+            values.append(eval(test["test_string"], inspect.currentframe().f_back.f_locals))
 
         response = requests.post(server_url + "publish_grader",
              params = {"user_key": user_key,
@@ -146,6 +133,8 @@ def submit(user_key):
     def wrap(func):
         test_cases = load_test_cases()
         tests = test_cases[func.__name__]["grader_cases"]
+        inspect.currentframe().f_back.f_locals[func.__name__] = func
+
         print(f"### Submitting {len(tests)} grader tests")
 
         if isinstance(func, types.FunctionType):
@@ -173,7 +162,7 @@ def submit(user_key):
         outputs = [None]*len(tests)
         for i,test in enumerate(tests):
             print(f"# Running test {i+1}/{len(tests)} ... ", end="")
-            value = get_test_value(i, func, tests, outputs)
+            value = eval(test["test_string"], inspect.currentframe().f_back.f_locals)
             response = requests.post(server_url + "submission_test",
                 params = {"user_key": user_key,
                           "submission_key":key, 
