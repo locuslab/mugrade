@@ -17,7 +17,7 @@ def objects_equal(value,ref):
     """ Test if two objects are equal according to our autograding rules.
     We have to do this manually so that numpy arrays are compard properly. """
 
-    if type(value) != type(ref):
+    if not isinstance(value, type(ref))
         return False
 
     if isinstance(ref, dict):
